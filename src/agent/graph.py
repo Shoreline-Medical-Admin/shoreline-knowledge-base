@@ -145,7 +145,10 @@ async def retrieve_documents(state: State, config: RunnableConfig) -> Dict[str, 
             
             # Format documents for context with KB type prefix
             if documents:
-                kb_context = f"[From {kb_type.upper()} Knowledge Base]\n"
+                kb_name = kb_type.replace("_", " ").title()
+                kb_icon = "🏥" if "medical" in kb_type.lower() else "📋" if "cms" in kb_type.lower() else "📄"
+                kb_context = f"{kb_icon} **{kb_name} Knowledge Base**\n"
+                kb_context += "═" * 40 + "\n"
                 kb_context += retriever.format_documents_for_context(documents)
                 context_parts.append(kb_context)
             
@@ -160,7 +163,7 @@ async def retrieve_documents(state: State, config: RunnableConfig) -> Dict[str, 
                 all_sources.append(source_info)
         
         # Combine contexts
-        combined_context = "\n\n===\n\n".join(context_parts) if context_parts else "No relevant documents found."
+        combined_context = "\n\n\n🔗 " + "━" * 50 + " 🔗\n\n\n".join(context_parts) if context_parts else "No relevant documents found."
         
         # Sort all documents by score
         all_documents.sort(key=lambda x: x.get("score", 0.0), reverse=True)
@@ -189,7 +192,7 @@ async def generate_answer(state: State, config: RunnableConfig) -> Dict[str, Any
     # Check if we have context
     if not state.context or state.context == "No relevant documents found.":
         return {
-            "answer": "I couldn't find relevant information to answer your question. Please try rephrasing or ask about something else.",
+            "answer": "🔍 **No relevant information found**\n\nI couldn't find any documents in the knowledge base that match your query.\n\n**Suggestions:**\n• Try rephrasing your question\n• Use different keywords\n• Check if the topic is covered in the available knowledge bases",
         }
     
     # Get LLM configuration with environment fallbacks
@@ -210,10 +213,16 @@ async def generate_answer(state: State, config: RunnableConfig) -> Dict[str, Any
         
         # Create the prompt
         prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are a helpful assistant that answers questions based on the provided context.
+            ("system", """You are a helpful medical and coding assistant that answers questions based on the provided context.
 Use ONLY the information from the context to answer questions. 
 If the context doesn't contain enough information to answer the question, say so clearly.
-Be concise but comprehensive in your answers."""),
+
+When answering:
+- Be concise but comprehensive
+- Use bullet points for lists
+- Highlight key information with **bold** text
+- For codes or specific values, format them clearly (e.g., Code: **12**)
+- If multiple relevant pieces of information exist, organize them clearly"""),
             ("human", """Context:
 {context}
 
@@ -251,12 +260,16 @@ async def format_response(state: State, config: RunnableConfig) -> Dict[str, Any
     # If there's an error, return it
     if state.error:
         return {
-            "answer": f"Error: {state.error}",
+            "answer": f"❌ Error: {state.error}",
         }
     
-    # Format response with sources if available
+    # Start with the answer
+    formatted_response = f"💡 **Answer:**\n{state.answer}"
+    
+    # Add sources if available
     if state.sources:
-        sources_text = "\n\nSources:"
+        formatted_response += "\n\n" + "─" * 50 + "\n"
+        formatted_response += "📚 **Sources:**"
         
         # Group sources by KB type
         sources_by_kb = {}
@@ -270,18 +283,37 @@ async def format_response(state: State, config: RunnableConfig) -> Dict[str, Any
         for kb_type, kb_sources in sources_by_kb.items():
             if kb_sources:
                 kb_name = kb_type.replace("_", " ").title()
-                sources_text += f"\n\nFrom {kb_name}:"
+                # Use different icons for different KB types
+                kb_icon = "🏥" if "medical" in kb_type.lower() else "📋" if "cms" in kb_type.lower() else "📄"
+                
+                formatted_response += f"\n\n{kb_icon} **{kb_name}:**"
                 for i, source in enumerate(kb_sources[:3], 1):  # Max 3 per KB
                     score = source.get("score", 0.0)
                     metadata = source.get("metadata", {})
+                    location = source.get("location", {})
+                    
+                    # Format relevance score with visual indicator
+                    if score >= 0.9:
+                        relevance_indicator = "🟢"
+                    elif score >= 0.7:
+                        relevance_indicator = "🟡"
+                    else:
+                        relevance_indicator = "🔴"
+                    
+                    formatted_response += f"\n  {relevance_indicator} Source {i} (Relevance: {score:.2%})"
+                    
+                    # Add metadata if available
                     if metadata:
-                        sources_text += f"\n- Source {i} (Relevance: {score:.2f})"
+                        for key, value in metadata.items():
+                            if value and key not in ['chunkId', 'x-amz-bedrock-kb-chunk-id']:
+                                formatted_response += f"\n     • {key}: {value}"
         
-        return {
-            "answer": state.answer + sources_text,
-        }
+        formatted_response += "\n\n" + "─" * 50
     
-    return {"answer": state.answer}
+    # Add a footer with retrieval statistics
+    formatted_response += f"\n\n📊 Retrieved {len(state.retrieved_documents)} documents from {len(set(doc.get('kb_type', 'unknown') for doc in state.retrieved_documents))} knowledge base(s)"
+    
+    return {"answer": formatted_response}
 
 
 # Define the graph
