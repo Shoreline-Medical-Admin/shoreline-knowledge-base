@@ -1,5 +1,6 @@
 """Unit tests for the graph components."""
 
+import os
 import pytest
 from unittest.mock import Mock, patch, AsyncMock
 from typing import Dict, Any
@@ -26,6 +27,9 @@ class TestState:
         assert state.answer == ""
         assert state.sources == []
         assert state.error is None
+        assert state.reasoning_engine is None
+        assert state.confidence_score == 0.0
+        assert state.show_reasoning is True
 
     def test_state_with_values(self):
         """Test State initialization with custom values."""
@@ -66,26 +70,33 @@ class TestGraphNodes:
             mock_retriever = Mock()
             mock_retriever_class.return_value = mock_retriever
             
-            mock_retriever.retrieve.return_value = {
-                "documents": [
-                    {
-                        "content": "Test content",
-                        "score": 0.95,
-                        "metadata": {"source": "test.pdf"},
-                        "location": {"s3": "s3://bucket/test.pdf"}
-                    }
-                ],
-                "error": None
-            }
+            # Create async mock for aretrieve
+            async def mock_aretrieve(query):
+                return {
+                    "documents": [
+                        {
+                            "content": "Test content",
+                            "score": 0.95,
+                            "metadata": {"source": "test.pdf"},
+                            "location": {"s3": "s3://bucket/test.pdf"},
+                            "kb_type": "general"
+                        }
+                    ],
+                    "error": None
+                }
+            
+            mock_retriever.aretrieve = mock_aretrieve
             mock_retriever.format_documents_for_context.return_value = "Formatted context"
             
             result = await retrieve_documents(state, config)
             
             assert len(result["retrieved_documents"]) == 1
-            assert result["context"] == "Formatted context"
+            assert "Formatted context" in result["context"]
             assert len(result["sources"]) == 1
             assert result["sources"][0]["score"] == 0.95
             assert result["error"] is None
+            assert result["reasoning_engine"] is not None
+            assert result["confidence_score"] > 0
 
     @pytest.mark.asyncio
     async def test_retrieve_documents_no_kb_id(self):
@@ -93,11 +104,19 @@ class TestGraphNodes:
         state = State(query="test query")
         config = {"configurable": {}}
         
-        result = await retrieve_documents(state, config)
-        
-        assert result["error"] == "Knowledge Base ID not configured"
-        assert result["retrieved_documents"] == []
-        assert result["context"] == ""
+        # Mock environment variables to be empty
+        with patch.dict(os.environ, {
+            "MEDICAL_GUIDELINES_KB_ID": "",
+            "CMS_CODING_KB_ID": "",
+            "BEDROCK_KNOWLEDGE_BASE_ID": ""
+        }, clear=False):
+            result = await retrieve_documents(state, config)
+            
+            assert result["error"] == "No Knowledge Base IDs configured"
+            assert result["retrieved_documents"] == []
+            assert result["context"] == ""
+            assert result["reasoning_engine"] is not None
+            assert result["confidence_score"] == 0.0
 
     @pytest.mark.asyncio
     async def test_generate_answer_with_context(self):
@@ -115,7 +134,7 @@ class TestGraphNodes:
         }
         
         with patch("agent.graph.ChatBedrock") as mock_llm_class:
-            mock_llm = AsyncMock()
+            mock_llm = Mock()
             mock_llm_class.return_value = mock_llm
             
             # Mock the chain response
@@ -123,15 +142,20 @@ class TestGraphNodes:
             mock_response.content = "AWS is Amazon Web Services."
             
             # Create a mock chain that returns the response
-            mock_chain = AsyncMock()
-            mock_chain.ainvoke.return_value = mock_response
+            mock_chain = Mock()
+            mock_chain.invoke = Mock(return_value=mock_response)
             
             with patch("agent.graph.ChatPromptTemplate.from_messages") as mock_prompt:
                 mock_prompt.return_value.__or__ = Mock(return_value=mock_chain)
                 
-                result = await generate_answer(state, config)
-                
-                assert result["answer"] == "AWS is Amazon Web Services."
+                # Add asyncio.to_thread patch since we use it in the actual function
+                with patch("asyncio.to_thread") as mock_to_thread:
+                    # Make asyncio.to_thread just call the function directly
+                    mock_to_thread.side_effect = lambda func, *args, **kwargs: func(*args, **kwargs)
+                    
+                    result = await generate_answer(state, config)
+                    
+                    assert result["answer"] == "AWS is Amazon Web Services."
 
     @pytest.mark.asyncio
     async def test_generate_answer_no_context(self):
@@ -141,7 +165,7 @@ class TestGraphNodes:
         
         result = await generate_answer(state, config)
         
-        assert "couldn't find relevant information" in result["answer"]
+        assert "No relevant information found" in result["answer"]
 
     @pytest.mark.asyncio
     async def test_format_response_with_sources(self):
@@ -149,8 +173,12 @@ class TestGraphNodes:
         state = State(
             answer="This is the answer.",
             sources=[
-                {"score": 0.95, "metadata": {"source": "doc1"}},
-                {"score": 0.87, "metadata": {"source": "doc2"}}
+                {"score": 0.95, "metadata": {"source": "doc1"}, "kb_type": "medical_guidelines"},
+                {"score": 0.87, "metadata": {"source": "doc2"}, "kb_type": "cms_coding"}
+            ],
+            retrieved_documents=[
+                {"kb_type": "medical_guidelines"},
+                {"kb_type": "cms_coding"}
             ]
         )
         config = {"configurable": {}}
@@ -159,8 +187,10 @@ class TestGraphNodes:
         
         assert "This is the answer." in result["answer"]
         assert "Sources:" in result["answer"]
-        assert "Source 1 (Relevance: 0.95)" in result["answer"]
-        assert "Source 2 (Relevance: 0.87)" in result["answer"]
+        assert "95.00%" in result["answer"]  # Score formatting changed
+        assert "87.00%" in result["answer"]
+        assert "🟢" in result["answer"]  # High relevance indicator
+        assert "🟡" in result["answer"]  # Medium relevance indicator
 
     @pytest.mark.asyncio
     async def test_format_response_with_error(self):
@@ -173,7 +203,7 @@ class TestGraphNodes:
         
         result = await format_response(state, config)
         
-        assert result["answer"] == "Error: Test error message"
+        assert result["answer"] == "❌ Error: Test error message"
 
 
 class TestGraph:

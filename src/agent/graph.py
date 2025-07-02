@@ -18,6 +18,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph import StateGraph
 
 from agent.bedrock_retriever import BedrockKnowledgeBaseRetriever
+from agent.reasoning import ReasoningEngine, UncertaintyType
 
 # Load environment variables
 load_dotenv()
@@ -52,7 +53,7 @@ class Configuration(TypedDict):
 class State:
     """State for the Knowledge Base Q&A agent.
 
-    Tracks the query, retrieved documents, and generated answer.
+    Tracks the query, retrieved documents, generated answer, and reasoning.
     """
 
     query: str = ""
@@ -61,11 +62,17 @@ class State:
     answer: str = ""
     sources: List[Dict[str, Any]] = field(default_factory=list)
     error: Optional[str] = None
+    reasoning_engine: Optional[ReasoningEngine] = None
+    confidence_score: float = 0.0
+    show_reasoning: bool = True
 
 
 async def retrieve_documents(state: State, config: RunnableConfig) -> Dict[str, Any]:
     """Retrieve relevant documents from AWS Bedrock Knowledge Base."""
     configuration = config.get("configurable", {})
+    
+    # Initialize reasoning engine
+    reasoning_engine = ReasoningEngine()
     
     # Get configuration with environment fallbacks
     aws_region = configuration.get("aws_region") or os.getenv("AWS_DEFAULT_REGION", "us-east-1")
@@ -101,10 +108,13 @@ async def retrieve_documents(state: State, config: RunnableConfig) -> Dict[str, 
     
     if not kb_ids:
         logger.error(f"No Knowledge Base IDs found. Legacy KB: {legacy_kb_id}, Medical: {medical_kb_id}, CMS: {cms_kb_id}")
+        reasoning_engine.uncertainty_flags.append(UncertaintyType.NO_SOURCES)
         return {
             "error": "No Knowledge Base IDs configured",
             "retrieved_documents": [],
             "context": "",
+            "reasoning_engine": reasoning_engine,
+            "confidence_score": 0.0,
         }
     
     logger.info(f"Will query {len(kb_ids)} knowledge base(s): {kb_ids}")
@@ -169,11 +179,17 @@ async def retrieve_documents(state: State, config: RunnableConfig) -> Dict[str, 
         all_documents.sort(key=lambda x: x.get("score", 0.0), reverse=True)
         all_sources.sort(key=lambda x: x.get("score", 0.0), reverse=True)
         
+        # Evaluate sources and calculate confidence
+        source_confidence, evaluations = reasoning_engine.evaluate_sources(all_documents, state.query)
+        confidence_score = reasoning_engine.calculate_confidence_score(source_confidence)
+        
         return {
             "retrieved_documents": all_documents,
             "context": combined_context,
             "sources": all_sources,
             "error": None,
+            "reasoning_engine": reasoning_engine,
+            "confidence_score": confidence_score,
         }
         
     except Exception as e:
@@ -182,6 +198,8 @@ async def retrieve_documents(state: State, config: RunnableConfig) -> Dict[str, 
             "error": f"Retrieval error: {str(e)}",
             "retrieved_documents": [],
             "context": "",
+            "reasoning_engine": reasoning_engine,
+            "confidence_score": 0.0,
         }
 
 
@@ -191,8 +209,14 @@ async def generate_answer(state: State, config: RunnableConfig) -> Dict[str, Any
     
     # Check if we have context
     if not state.context or state.context == "No relevant documents found.":
+        no_context_answer = "🔍 **No relevant information found**\n\nI couldn't find any documents in the knowledge base that match your query.\n\n**Suggestions:**\n• Try rephrasing your question\n• Use different keywords\n• Check if the topic is covered in the available knowledge bases"
+        
+        # Add reasoning if available
+        if state.reasoning_engine and state.show_reasoning:
+            no_context_answer += state.reasoning_engine.format_reasoning(state.confidence_score, show_details=True)
+        
         return {
-            "answer": "🔍 **No relevant information found**\n\nI couldn't find any documents in the knowledge base that match your query.\n\n**Suggestions:**\n• Try rephrasing your question\n• Use different keywords\n• Check if the topic is covered in the available knowledge bases",
+            "answer": no_context_answer,
         }
     
     # Get LLM configuration with environment fallbacks
@@ -211,18 +235,34 @@ async def generate_answer(state: State, config: RunnableConfig) -> Dict[str, Any
         
         llm = await asyncio.to_thread(create_llm)
         
-        # Create the prompt
+        # Create confidence-aware prompt
+        confidence_level = "high" if state.confidence_score >= 0.8 else "medium" if state.confidence_score >= 0.6 else "low"
+        
+        # Add uncertainty considerations to system prompt if needed
+        uncertainty_notes = ""
+        if state.reasoning_engine and state.reasoning_engine.uncertainty_flags:
+            if UncertaintyType.OUTDATED_INFORMATION in state.reasoning_engine.uncertainty_flags:
+                uncertainty_notes += "\n- Some sources may be outdated - mention if information might have changed"
+            if UncertaintyType.CONFLICTING_SOURCES in state.reasoning_engine.uncertainty_flags:
+                uncertainty_notes += "\n- Sources contain conflicting information - present different viewpoints if relevant"
+            if UncertaintyType.LIMITED_SOURCES in state.reasoning_engine.uncertainty_flags:
+                uncertainty_notes += "\n- Limited sources available - acknowledge gaps in information"
+        
         prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are a helpful medical and coding assistant that answers questions based on the provided context.
+            ("system", f"""You are a helpful medical and coding assistant that answers questions based on the provided context.
 Use ONLY the information from the context to answer questions. 
 If the context doesn't contain enough information to answer the question, say so clearly.
+
+Current confidence level: {confidence_level} ({state.confidence_score:.0%})
+{uncertainty_notes}
 
 When answering:
 - Be concise but comprehensive
 - Use bullet points for lists
 - Highlight key information with **bold** text
 - For codes or specific values, format them clearly (e.g., Code: **12**)
-- If multiple relevant pieces of information exist, organize them clearly"""),
+- If multiple relevant pieces of information exist, organize them clearly
+- If confidence is low or medium, acknowledge limitations in the available information"""),
             ("human", """Context:
 {context}
 
@@ -290,7 +330,6 @@ async def format_response(state: State, config: RunnableConfig) -> Dict[str, Any
                 for i, source in enumerate(kb_sources[:3], 1):  # Max 3 per KB
                     score = source.get("score", 0.0)
                     metadata = source.get("metadata", {})
-                    location = source.get("location", {})
                     
                     # Format relevance score with visual indicator
                     if score >= 0.9:
@@ -312,6 +351,10 @@ async def format_response(state: State, config: RunnableConfig) -> Dict[str, Any
     
     # Add a footer with retrieval statistics
     formatted_response += f"\n\n📊 Retrieved {len(state.retrieved_documents)} documents from {len(set(doc.get('kb_type', 'unknown') for doc in state.retrieved_documents))} knowledge base(s)"
+    
+    # Add reasoning explanation if available
+    if state.reasoning_engine and state.show_reasoning:
+        formatted_response += state.reasoning_engine.format_reasoning(state.confidence_score, show_details=True)
     
     return {"answer": formatted_response}
 
