@@ -1,0 +1,14 @@
+# Version constraints file
+# Use this to pin specific versions across all environments
+# pip install -c requirements/constraints.txt -r requirements/dev.txt
+
+# Pin critical dependencies to avoid breaking changes
+langchain-core>=0.2.0,<0.3.0
+langchain>=0.2.0,<0.3.0
+
+# AWS SDK constraints
+botocore>=1.34.0,<2.0.0
+
+# Security patches - update these regularly
+urllib3>=2.0.7,<3.0.0
+cryptography>=41.0.0
