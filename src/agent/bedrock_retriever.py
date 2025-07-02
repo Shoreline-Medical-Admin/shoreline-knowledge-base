@@ -161,8 +161,21 @@ class BedrockKnowledgeBaseRetriever:
         for i, doc in enumerate(documents, 1):
             content = doc.get("content", "").strip()
             score = doc.get("score", 0.0)
+            metadata = doc.get("metadata", {})
             
             if content:
-                context_parts.append(f"[Document {i}] (Relevance: {score:.2f})\n{content}")
+                # Add document header with relevance
+                header = f"[Document {i}] (Relevance: {score:.2%})"
+                
+                # Add metadata if available
+                if metadata:
+                    meta_parts = []
+                    for key, value in metadata.items():
+                        if value and key not in ['chunkId', 'x-amz-bedrock-kb-chunk-id']:
+                            meta_parts.append(f"{key}: {value}")
+                    if meta_parts:
+                        header += f" | {' | '.join(meta_parts)}"
+                
+                context_parts.append(f"{header}\n{content}")
         
-        return "\n\n---\n\n".join(context_parts)
+        return "\n\n════════════════════════════════════════\n\n".join(context_parts)
