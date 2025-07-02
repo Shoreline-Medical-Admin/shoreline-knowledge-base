@@ -37,7 +37,7 @@ def load_config() -> Dict[str, Any]:
         "knowledge_base_id": os.getenv("BEDROCK_KNOWLEDGE_BASE_ID"),  # Legacy support
         "medical_guidelines_kb_id": os.getenv("MEDICAL_GUIDELINES_KB_ID", "VXMUOUXXCF"),
         "cms_coding_kb_id": os.getenv("CMS_CODING_KB_ID", "X1DCXMHW9T"),
-        "model_id": os.getenv("BEDROCK_MODEL_ID", "anthropic.claude-3-sonnet-20240229-v1:0"),
+        "model_id": os.getenv("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-20250514-v1:0"),
         "temperature": float(os.getenv("BEDROCK_MODEL_TEMPERATURE", "0.3")),
         "max_results": int(os.getenv("BEDROCK_MAX_RESULTS", "5")),
         "knowledge_bases": os.getenv("KNOWLEDGE_BASES", "both"),  # "medical", "cms", or "both"
@@ -94,7 +94,7 @@ def get_default_config() -> Dict[str, Any]:
             "medical_guidelines_kb_id": "VXMUOUXXCF",
             "cms_coding_kb_id": "X1DCXMHW9T",
             "aws_region": "us-east-1",
-            "model_id": "anthropic.claude-3-sonnet-20240229-v1:0",
+            "model_id": "us.anthropic.claude-sonnet-4-20250514-v1:0",
             "max_results": 5,
             "temperature": 0.3,
             "knowledge_bases": "both",

@@ -193,7 +193,7 @@ async def generate_answer(state: State, config: RunnableConfig) -> Dict[str, Any
         }
     
     # Get LLM configuration with environment fallbacks
-    model_id = configuration.get("model_id") or os.getenv("BEDROCK_MODEL_ID", "anthropic.claude-3-sonnet-20240229-v1:0")
+    model_id = configuration.get("model_id") or os.getenv("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-20250514-v1:0")
     aws_region = configuration.get("aws_region") or os.getenv("AWS_DEFAULT_REGION", "us-east-1")
     temperature = configuration.get("temperature") or float(os.getenv("BEDROCK_MODEL_TEMPERATURE", "0.3"))
     

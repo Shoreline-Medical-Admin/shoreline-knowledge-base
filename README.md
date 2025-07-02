@@ -59,8 +59,8 @@ CMS_CODING_KB_ID=X1DCXMHW9T
 KNOWLEDGE_BASES=both
 
 # Optional: Customize model settings
-# Using Claude 3 Sonnet (available in Bedrock)
-BEDROCK_MODEL_ID=anthropic.claude-3-sonnet-20240229-v1:0
+# Using Claude Sonnet 4 with US inference profile (latest)
+BEDROCK_MODEL_ID=us.anthropic.claude-sonnet-4-20250514-v1:0
 BEDROCK_MODEL_TEMPERATURE=0.3
 BEDROCK_MAX_RESULTS=5
 ```
@@ -94,7 +94,7 @@ Once the server is running, you can interact with the agent through LangGraph St
         "cms_coding_kb_id": "X1DCXMHW9T",
         "knowledge_bases": "both",
         "aws_region": "us-east-1",
-        "model_id": "anthropic.claude-3-sonnet-20240229-v1:0",
+        "model_id": "us.anthropic.claude-sonnet-4-20250514-v1:0",
         "max_results": 5,
         "temperature": 0.3
     }
@@ -123,7 +123,7 @@ Once the server is running, you can interact with the agent through LangGraph St
 - **cms_coding_kb_id**: CMS Coding Knowledge Base ID  
 - **knowledge_bases**: Which KBs to query - "medical", "cms", or "both" (default: both)
 - **aws_region**: AWS region for Bedrock services (default: us-east-1)
-- **model_id**: Bedrock model to use for generation (default: Claude 3 Sonnet)
+- **model_id**: Bedrock model to use for generation (default: Claude Sonnet 4)
 - **max_results**: Maximum number of documents to retrieve per KB (default: 5)
 - **temperature**: Model temperature for response generation (default: 0.3)
 
