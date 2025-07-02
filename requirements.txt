@@ -1,0 +1,6 @@
+# Main requirements file - includes all base dependencies
+# For development, use: pip install -r requirements/dev.txt
+# For production, use: pip install -r requirements/prod.txt
+# For testing only, use: pip install -r requirements/test.txt
+
+-r requirements/base.txt
