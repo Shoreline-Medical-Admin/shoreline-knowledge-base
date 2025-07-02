@@ -1,17 +1,24 @@
-# New LangGraph Project
+# AWS Bedrock Knowledge Base Q&A Agent
 
 [![CI](https://github.com/langchain-ai/new-langgraph-project/actions/workflows/unit-tests.yml/badge.svg)](https://github.com/langchain-ai/new-langgraph-project/actions/workflows/unit-tests.yml)
 [![Integration Tests](https://github.com/langchain-ai/new-langgraph-project/actions/workflows/integration-tests.yml/badge.svg)](https://github.com/langchain-ai/new-langgraph-project/actions/workflows/integration-tests.yml)
 
-This template demonstrates a simple application implemented using [LangGraph](https://github.com/langchain-ai/langgraph), designed for showing how to get started with [LangGraph Server](https://langchain-ai.github.io/langgraph/concepts/langgraph_server/#langgraph-server) and using [LangGraph Studio](https://langchain-ai.github.io/langgraph/concepts/langgraph_studio/), a visual debugging IDE.
+This LangGraph agent retrieves information from AWS Bedrock Knowledge Base and generates answers to user questions. It uses a multi-node graph architecture with retrieval-augmented generation (RAG) to provide accurate, context-based responses.
 
 <div align="center">
   <img src="./static/studio_ui.png" alt="Graph view in LangGraph studio UI" width="75%" />
 </div>
 
-The core logic defined in `src/agent/graph.py`, showcases an single-step application that responds with a fixed string and the configuration provided.
+## Features
 
-You can extend this graph to orchestrate more complex agentic workflows that can be visualized and debugged in LangGraph Studio.
+- **Multiple Knowledge Base Support**: Query from Medical Guidelines and CMS Coding knowledge bases
+- **AWS Bedrock Knowledge Base Integration**: Retrieves relevant documents from your knowledge bases
+- **Retrieval-Augmented Generation**: Uses retrieved context to generate accurate answers
+- **Source Attribution**: Shows which KB each source came from with relevance scores
+- **Configurable Parameters**: Customize model, temperature, and retrieval settings
+- **Flexible Querying**: Choose to query medical KB, CMS KB, or both
+- **Error Handling**: Graceful handling of AWS authentication and retrieval errors
+- **LangGraph Studio Support**: Visual debugging and monitoring of the agent workflow
 
 ## Getting Started
 
@@ -30,17 +37,32 @@ cd path/to/your/app
 pip install -e . "langgraph-cli[inmem]"
 ```
 
-2. (Optional) Customize the code and project as needed. Create a `.env` file if you need to use secrets.
+2. Set up your AWS credentials and configuration. Create a `.env` file:
 
 ```bash
 cp .env.example .env
 ```
 
-If you want to enable LangSmith tracing, add your LangSmith API key to the `.env` file.
+Edit the `.env` file with your AWS and Bedrock configuration:
 
 ```text
-# .env
-LANGSMITH_API_KEY=lsv2...
+# AWS Configuration (REQUIRED)
+AWS_ACCESS_KEY_ID=your_access_key_here
+AWS_SECRET_ACCESS_KEY=your_secret_key_here
+AWS_DEFAULT_REGION=us-east-1
+
+# Bedrock Knowledge Base Configuration
+MEDICAL_GUIDELINES_KB_ID=VXMUOUXXCF
+CMS_CODING_KB_ID=X1DCXMHW9T
+
+# Which knowledge bases to query ("medical", "cms", or "both")
+KNOWLEDGE_BASES=both
+
+# Optional: Customize model settings
+# Using Claude 3 Sonnet (available in Bedrock)
+BEDROCK_MODEL_ID=anthropic.claude-3-sonnet-20240229-v1:0
+BEDROCK_MODEL_TEMPERATURE=0.3
+BEDROCK_MAX_RESULTS=5
 ```
 
 3. Start the LangGraph Server.
@@ -51,11 +73,67 @@ langgraph dev
 
 For more information on getting started with LangGraph Server, [see here](https://langchain-ai.github.io/langgraph/tutorials/langgraph-platform/local-server/).
 
-## How to customize
+## Architecture
 
-1. **Define configurable parameters**: Modify the `Configuration` class in the `graph.py` file to expose the arguments you want to configure. For example, in a chatbot application you may want to define a dynamic system prompt or LLM to use. For more information on configurations in LangGraph, [see here](https://langchain-ai.github.io/langgraph/concepts/low_level/?h=configuration#configuration).
+The agent uses a multi-node graph with the following flow:
 
-2. **Extend the graph**: The core logic of the application is defined in [graph.py](./src/agent/graph.py). You can modify this file to add new nodes, edges, or change the flow of information.
+1. **retrieve_documents**: Queries AWS Bedrock Knowledge Base for relevant documents
+2. **generate_answer**: Uses retrieved context with Bedrock LLM to generate an answer
+3. **format_response**: Formats the final response with source attribution
+
+## Usage
+
+Once the server is running, you can interact with the agent through LangGraph Studio or the API:
+
+```python
+# Example request - Query both knowledge bases
+{
+    "query": "What are the coding guidelines for diabetes management?",
+    "configurable": {
+        "medical_guidelines_kb_id": "VXMUOUXXCF",
+        "cms_coding_kb_id": "X1DCXMHW9T",
+        "knowledge_bases": "both",
+        "aws_region": "us-east-1",
+        "model_id": "anthropic.claude-3-sonnet-20240229-v1:0",
+        "max_results": 5,
+        "temperature": 0.3
+    }
+}
+
+# Example - Query only medical guidelines
+{
+    "query": "What are the treatment protocols for hypertension?",
+    "configurable": {
+        "knowledge_bases": "medical"
+    }
+}
+
+# Example - Query only CMS coding
+{
+    "query": "What is the CPT code for a routine physical exam?",
+    "configurable": {
+        "knowledge_bases": "cms"
+    }
+}
+```
+
+## Configuration Options
+
+- **medical_guidelines_kb_id**: Medical Guidelines Knowledge Base ID
+- **cms_coding_kb_id**: CMS Coding Knowledge Base ID  
+- **knowledge_bases**: Which KBs to query - "medical", "cms", or "both" (default: both)
+- **aws_region**: AWS region for Bedrock services (default: us-east-1)
+- **model_id**: Bedrock model to use for generation (default: Claude 3 Sonnet)
+- **max_results**: Maximum number of documents to retrieve per KB (default: 5)
+- **temperature**: Model temperature for response generation (default: 0.3)
+
+## Prerequisites
+
+1. **AWS Account**: You need an AWS account with Bedrock access
+2. **Knowledge Base**: Create a Bedrock Knowledge Base with your documents
+3. **IAM Permissions**: Ensure your AWS credentials have permissions for:
+   - `bedrock:InvokeModel`
+   - `bedrock:Retrieve`
 
 ## Development
 
