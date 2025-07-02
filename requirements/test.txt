@@ -1,0 +1,13 @@
+# Testing requirements
+-r base.txt
+
+# Testing frameworks and tools
+pytest>=8.3.5
+pytest-asyncio>=0.21.0
+pytest-cov>=4.1.0
+pytest-mock>=3.11.0
+pytest-timeout>=2.1.0
+
+# Mocking and testing utilities
+moto[bedrock]>=4.2.0  # For mocking AWS services
+responses>=0.23.0
