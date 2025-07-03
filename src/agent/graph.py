@@ -19,7 +19,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph import StateGraph, MessagesState
 
 from agent.bedrock_retriever import BedrockKnowledgeBaseRetriever
-from agent.reasoning import ReasoningEngine, UncertaintyType
+from agent.reasoning import ReasoningEngine, UncertaintyType, ConfidenceLevel
 
 # Load environment variables
 load_dotenv()
@@ -345,58 +345,77 @@ async def format_response(state: AgentState, config: RunnableConfig) -> Dict[str
         return {"messages": [AIMessage(content="No answer generated")]}
     formatted_response = f"💡 **Answer:**\n{answer}"
     
-    # Add sources if available
-    sources = state.get("sources", [])
-    if sources:
-        formatted_response += "\n\n" + "─" * 50 + "\n"
-        formatted_response += "📚 **Sources:**"
-        
-        # Group sources by KB type
-        sources_by_kb = {}
-        for source in sources[:6]:  # Limit to top 6 sources total
-            kb_type = source.get("kb_type", "unknown")
-            if kb_type not in sources_by_kb:
-                sources_by_kb[kb_type] = []
-            sources_by_kb[kb_type].append(source)
-        
-        # Format sources grouped by KB
-        for kb_type, kb_sources in sources_by_kb.items():
-            if kb_sources:
-                kb_name = kb_type.replace("_", " ").title()
-                # Use different icons for different KB types
-                kb_icon = "🏥" if "medical" in kb_type.lower() else "📋" if "cms" in kb_type.lower() else "📄"
-                
-                formatted_response += f"\n\n{kb_icon} **{kb_name}:**"
-                for i, source in enumerate(kb_sources[:3], 1):  # Max 3 per KB
-                    score = source.get("score", 0.0)
-                    metadata = source.get("metadata", {})
-                    
-                    # Format relevance score with visual indicator
-                    if score >= 0.9:
-                        relevance_indicator = "🟢"
-                    elif score >= 0.7:
-                        relevance_indicator = "🟡"
-                    else:
-                        relevance_indicator = "🔴"
-                    
-                    formatted_response += f"\n  {relevance_indicator} Source {i} (Relevance: {score:.2%})"
-                    
-                    # Add metadata if available
-                    if metadata:
-                        for key, value in metadata.items():
-                            if value and key not in ['chunkId', 'x-amz-bedrock-kb-chunk-id']:
-                                formatted_response += f"\n     • {key}: {value}"
-        
-        formatted_response += "\n\n" + "─" * 50
-    
-    # Add a footer with retrieval statistics
-    retrieved_docs = state.get("retrieved_documents", [])
-    formatted_response += f"\n\n📊 Retrieved {len(retrieved_docs)} documents from {len(set(doc.get('kb_type', 'unknown') for doc in retrieved_docs))} knowledge base(s)"
-    
-    # Add reasoning explanation if available
+    # Add confidence score if available
     reasoning_engine = state.get("reasoning_engine")
-    if reasoning_engine and state.get("show_reasoning", True):
-        formatted_response += reasoning_engine.format_reasoning(state.get("confidence_score", 0.0), show_details=True)
+    if reasoning_engine:
+        confidence_score = state.get("confidence_score", 0.0)
+        confidence_level = reasoning_engine.get_confidence_level(confidence_score)
+        
+        # Confidence indicator
+        if confidence_level == ConfidenceLevel.HIGH:
+            indicator = "🟢"
+        elif confidence_level == ConfidenceLevel.MEDIUM:
+            indicator = "🟡"
+        elif confidence_level == ConfidenceLevel.LOW:
+            indicator = "🟠"
+        else:
+            indicator = "🔴"
+        
+        formatted_response += f"\n\n{indicator} **Confidence: {confidence_score:.0%}** ({confidence_level.value})"
+        
+        # Add any uncertainty warnings
+        formatted_response += reasoning_engine.format_reasoning(confidence_score, show_details=False)
+    
+    # Add sources section with special markers for collapsible display
+    sources = state.get("sources", [])
+    retrieved_docs = state.get("retrieved_documents", [])
+    
+    if sources or retrieved_docs:
+        formatted_response += "\n\n---SOURCES_START---"
+        
+        # Retrieval statistics
+        formatted_response += f"\n📊 Retrieved {len(retrieved_docs)} documents from {len(set(doc.get('kb_type', 'unknown') for doc in retrieved_docs))} knowledge base(s)\n"
+        
+        if sources:
+            formatted_response += "\n📚 **Sources:**"
+            
+            # Group sources by KB type
+            sources_by_kb = {}
+            for source in sources[:6]:  # Limit to top 6 sources total
+                kb_type = source.get("kb_type", "unknown")
+                if kb_type not in sources_by_kb:
+                    sources_by_kb[kb_type] = []
+                sources_by_kb[kb_type].append(source)
+            
+            # Format sources grouped by KB
+            for kb_type, kb_sources in sources_by_kb.items():
+                if kb_sources:
+                    kb_name = kb_type.replace("_", " ").title()
+                    # Use different icons for different KB types
+                    kb_icon = "🏥" if "medical" in kb_type.lower() else "📋" if "cms" in kb_type.lower() else "📄"
+                    
+                    formatted_response += f"\n\n{kb_icon} **{kb_name}:**"
+                    for i, source in enumerate(kb_sources[:3], 1):  # Max 3 per KB
+                        score = source.get("score", 0.0)
+                        metadata = source.get("metadata", {})
+                        
+                        # Format relevance score with visual indicator
+                        if score >= 0.9:
+                            relevance_indicator = "🟢"
+                        elif score >= 0.7:
+                            relevance_indicator = "🟡"
+                        else:
+                            relevance_indicator = "🔴"
+                        
+                        formatted_response += f"\n\n  {relevance_indicator} **Source {i}** (Relevance: {score:.2%})"
+                        
+                        # Add metadata if available
+                        if metadata:
+                            for key, value in metadata.items():
+                                if value and key not in ['chunkId', 'x-amz-bedrock-kb-chunk-id']:
+                                    formatted_response += f"\n     • {key}: {value}"
+        
+        formatted_response += "\n---SOURCES_END---"
     
     # Return as AIMessage for chat interface
     return {"messages": [AIMessage(content=formatted_response)]}
