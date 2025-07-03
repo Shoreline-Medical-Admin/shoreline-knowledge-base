@@ -77,11 +77,18 @@ class ReasoningEngine:
         evaluations = []
         total_score = 0.0
         
-        # Add retrieval success step
+        # Add retrieval success step with better bonus structure
+        if len(documents) >= 5:
+            impact = 0.15  # Good retrieval
+        elif len(documents) >= 2:
+            impact = 0.1   # Decent retrieval
+        else:
+            impact = 0.05  # Minimal but successful retrieval
+            
         self.reasoning_steps.append(ReasoningStep(
             step_type="retrieval",
             description=f"Retrieved {len(documents)} documents from knowledge base(s)",
-            confidence_impact=0.1,
+            confidence_impact=impact,
             details={"document_count": len(documents)}
         ))
         
@@ -91,25 +98,86 @@ class ReasoningEngine:
             total_score += evaluation.overall_score
         
         # Calculate base confidence from source scores
-        avg_score = total_score / len(documents) if documents else 0.0
+        # Use a weighted average that favors better sources instead of simple average
+        # This prevents one low-scoring source from dragging down the whole score
+        if documents:
+            # Sort evaluations by score
+            sorted_evals = sorted(evaluations, key=lambda e: e.overall_score, reverse=True)
+            # Weight top sources more heavily
+            weighted_sum = 0.0
+            weight_total = 0.0
+            for i, eval in enumerate(sorted_evals):
+                weight = 1.0 / (i + 1)  # 1.0, 0.5, 0.33, 0.25, etc.
+                weighted_sum += eval.overall_score * weight
+                weight_total += weight
+            avg_score = weighted_sum / weight_total if weight_total > 0 else 0.0
+        else:
+            avg_score = 0.0
         
-        # Check for limited sources
-        if len(documents) < 3:
+        # Apply a very aggressive curve to boost AWS Bedrock's conservative scores
+        # AWS Bedrock scores 50-60% are actually very good matches
+        if avg_score > 0.15:  # If we have any relevance at all
+            # Very aggressive boosting curve
+            # Map AWS Bedrock scores to realistic confidence:
+            # 0.3 -> 0.65, 0.4 -> 0.75, 0.5 -> 0.85, 0.6 -> 0.90
+            if avg_score < 0.4:
+                boosted = avg_score * 2.0 + 0.05
+            elif avg_score < 0.6:
+                boosted = avg_score * 1.5 + 0.25
+            else:
+                boosted = avg_score * 1.2 + 0.42
+            avg_score = min(0.95, boosted)
+        
+        # Check for limited sources - only penalize if we have 0 or 1 source
+        if len(documents) == 0:
+            self.uncertainty_flags.append(UncertaintyType.NO_SOURCES)
+            self.reasoning_steps.append(ReasoningStep(
+                step_type="source_evaluation",
+                description="No sources found",
+                confidence_impact=-0.5  # Severe penalty for no sources
+            ))
+        elif len(documents) == 1:
             self.uncertainty_flags.append(UncertaintyType.LIMITED_SOURCES)
             self.reasoning_steps.append(ReasoningStep(
                 step_type="source_evaluation",
-                description=f"Only {len(documents)} source(s) found - limited information available",
-                confidence_impact=-0.2
+                description="Only 1 source found - limited corroboration",
+                confidence_impact=-0.05  # Very minor penalty for single source
             ))
         
-        # Check for low relevance
-        high_relevance_count = sum(1 for e in evaluations if e.relevance_score > 0.8)
-        if high_relevance_count == 0:
+        # Check for low relevance - adjusted thresholds for AWS Bedrock's scoring
+        # AWS Bedrock considers 50%+ as relevant matches
+        moderate_relevance_count = sum(1 for e in evaluations if e.relevance_score > 0.4)
+        very_low_relevance_count = sum(1 for e in evaluations if e.relevance_score < 0.3)
+        
+        if very_low_relevance_count == len(evaluations):
+            # Only penalize if ALL sources have very low relevance
             self.uncertainty_flags.append(UncertaintyType.LOW_RELEVANCE)
             self.reasoning_steps.append(ReasoningStep(
                 step_type="source_evaluation",
-                description="No highly relevant sources found (all relevance scores < 80%)",
-                confidence_impact=-0.3
+                description="All sources have very low relevance (< 30%)",
+                confidence_impact=-0.2
+            ))
+        elif moderate_relevance_count == 0:
+            # Minor penalty if no sources reach moderate relevance
+            self.reasoning_steps.append(ReasoningStep(
+                step_type="source_evaluation",
+                description="Sources have low relevance scores",
+                confidence_impact=-0.05
+            ))
+        
+        # Add BONUS for having sources with AWS Bedrock "good" scores (>50%)
+        good_source_count = sum(1 for e in evaluations if e.relevance_score > 0.5)
+        if good_source_count >= 3:
+            self.reasoning_steps.append(ReasoningStep(
+                step_type="source_evaluation", 
+                description=f"Found {good_source_count} sources with good relevance",
+                confidence_impact=0.15  # Bigger bonus
+            ))
+        elif good_source_count >= 1:
+            self.reasoning_steps.append(ReasoningStep(
+                step_type="source_evaluation",
+                description=f"Found {good_source_count} source(s) with good relevance",
+                confidence_impact=0.1
             ))
         
         # Detect conflicting information
@@ -118,7 +186,7 @@ class ReasoningEngine:
             self.reasoning_steps.append(ReasoningStep(
                 step_type="conflict_detection",
                 description="Detected potentially conflicting information across sources",
-                confidence_impact=-0.25
+                confidence_impact=-0.15  # Reduced from -0.25
             ))
         
         self.source_evaluations = evaluations
@@ -142,11 +210,11 @@ class ReasoningEngine:
         # Authority score (based on metadata)
         authority_score = self._calculate_authority_score(doc)
         
-        # Overall score (weighted average)
+        # Overall score - for AWS Bedrock, use relevance as primary indicator
+        # Since AWS Bedrock already factors in content quality in its relevance score
         overall_score = (
-            relevance_score * 0.5 +
-            recency_score * 0.3 +
-            authority_score * 0.2
+            relevance_score * 0.85 +   # Heavy weight on AWS Bedrock's relevance
+            authority_score * 0.15     # Small weight on source authority
         )
         
         return SourceEvaluation(
@@ -246,9 +314,7 @@ class ReasoningEngine:
         for step in self.reasoning_steps:
             confidence += step.confidence_impact
         
-        # Apply uncertainty penalties
-        uncertainty_penalty = len(self.uncertainty_flags) * 0.1
-        confidence -= uncertainty_penalty
+        # Remove the additional uncertainty penalty - we already penalized in steps
         
         # Ensure confidence is between 0 and 1
         confidence = max(0.0, min(1.0, confidence))
@@ -280,23 +346,14 @@ class ReasoningEngine:
     
     def format_reasoning(self, confidence_score: float, show_details: bool = True) -> str:
         """Format reasoning explanation for display."""
-        confidence_level = self.get_confidence_level(confidence_score)
-        
-        # Confidence indicator
-        if confidence_level == ConfidenceLevel.HIGH:
-            indicator = "🟢"
-        elif confidence_level == ConfidenceLevel.MEDIUM:
-            indicator = "🟡"
-        elif confidence_level == ConfidenceLevel.LOW:
-            indicator = "🟠"
-        else:
-            indicator = "🔴"
-        
-        output = f"\n\n{indicator} **Confidence: {confidence_score:.0%}** ({confidence_level.value})\n"
+        # Parameters are kept for API compatibility but not used in simplified version
+        _ = confidence_score  # Suppress unused warning
+        _ = show_details     # Suppress unused warning
+        output = ""
         
         # Uncertainty warnings
         if self.uncertainty_flags:
-            output += "\n⚠️ **Important Considerations:**\n"
+            output += "\n\n⚠️ **Important Considerations:**\n"
             for flag in self.uncertainty_flags:
                 if flag == UncertaintyType.LIMITED_SOURCES:
                     output += "• Limited sources available - answer based on minimal information\n"
@@ -308,29 +365,5 @@ class ReasoningEngine:
                     output += "• No highly relevant sources found for this specific query\n"
                 elif flag == UncertaintyType.NO_SOURCES:
                     output += "• No sources found - unable to provide information\n"
-        
-        if show_details:
-            output += "\n<details>\n<summary>🔍 <b>Show Reasoning Process</b></summary>\n\n"
-            output += "### Reasoning Steps:\n"
-            
-            for i, step in enumerate(self.reasoning_steps, 1):
-                output += f"\n{i}. **{step.step_type.replace('_', ' ').title()}**: {step.description}"
-                if step.confidence_impact != 0:
-                    impact_sign = "+" if step.confidence_impact > 0 else ""
-                    output += f" ({impact_sign}{step.confidence_impact:.0%} confidence)"
-                output += "\n"
-            
-            if self.source_evaluations:
-                output += "\n### Source Evaluation:\n"
-                for eval in self.source_evaluations[:3]:  # Top 3 sources
-                    output += f"\n**{eval.source_id}**:\n"
-                    output += f"• Relevance: {eval.relevance_score:.0%}\n"
-                    output += f"• Recency: {eval.recency_score:.0%}"
-                    if "outdated" in eval.flags:
-                        output += " ⚠️"
-                    output += f"\n• Authority: {eval.authority_score:.0%}\n"
-                    output += f"• Overall: {eval.overall_score:.0%}\n"
-            
-            output += "\n</details>"
         
         return output
