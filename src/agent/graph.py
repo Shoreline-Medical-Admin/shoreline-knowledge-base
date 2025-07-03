@@ -8,14 +8,15 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import field
 from typing import Any, Dict, List, Optional, TypedDict
 
 from dotenv import load_dotenv
 from langchain_aws import ChatBedrock
+from langchain_core.messages import AIMessage, HumanMessage, AnyMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableConfig
-from langgraph.graph import StateGraph
+from langgraph.graph import StateGraph, MessagesState
 
 from agent.bedrock_retriever import BedrockKnowledgeBaseRetriever
 from agent.reasoning import ReasoningEngine, UncertaintyType
@@ -49,27 +50,48 @@ class Configuration(TypedDict):
     knowledge_bases: str  # Which KBs to query: "medical", "cms", "both"
 
 
-@dataclass
-class State:
-    """State for the Knowledge Base Q&A agent.
-
-    Tracks the query, retrieved documents, generated answer, and reasoning.
+class AgentState(MessagesState):
+    """Extended state for Knowledge Base Q&A agent with messages support.
+    
+    Inherits from MessagesState to support chat functionality in LangGraph Studio.
     """
-
-    query: str = ""
+    
     retrieved_documents: List[Dict[str, Any]] = field(default_factory=list)
     context: str = ""
-    answer: str = ""
     sources: List[Dict[str, Any]] = field(default_factory=list)
     error: Optional[str] = None
     reasoning_engine: Optional[ReasoningEngine] = None
     confidence_score: float = 0.0
     show_reasoning: bool = True
+    answer: str = ""  # Add answer field for intermediate processing
 
 
-async def retrieve_documents(state: State, config: RunnableConfig) -> Dict[str, Any]:
+async def retrieve_documents(state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
     """Retrieve relevant documents from AWS Bedrock Knowledge Base."""
     configuration = config.get("configurable", {})
+    
+    # Extract query from the last human message
+    messages = state.get("messages", [])
+    if not messages:
+        return {
+            "error": "No messages found in state",
+            "retrieved_documents": [],
+            "context": "",
+        }
+    
+    # Get the last human message as the query
+    query = None
+    for message in reversed(messages):
+        if isinstance(message, HumanMessage):
+            query = message.content
+            break
+    
+    if not query:
+        return {
+            "error": "No human message found to process",
+            "retrieved_documents": [],
+            "context": "",
+        }
     
     # Initialize reasoning engine
     reasoning_engine = ReasoningEngine()
@@ -85,7 +107,7 @@ async def retrieve_documents(state: State, config: RunnableConfig) -> Dict[str, 
     legacy_kb_id = configuration.get("knowledge_base_id") or os.getenv("BEDROCK_KNOWLEDGE_BASE_ID")
     
     # Debug logging
-    logger.info(f"Query: '{state.query}'")
+    logger.info(f"Query: '{query}'")
     logger.info(f"Configuration received: {configuration}")
     logger.info(f"Environment - Medical KB: {os.getenv('MEDICAL_GUIDELINES_KB_ID')}")
     logger.info(f"Environment - CMS KB: {os.getenv('CMS_CODING_KB_ID')}")
@@ -136,7 +158,7 @@ async def retrieve_documents(state: State, config: RunnableConfig) -> Dict[str, 
             )
             
             # Retrieve documents (using async version)
-            retrieval_result = await retriever.aretrieve(state.query)
+            retrieval_result = await retriever.aretrieve(query)
             
             if retrieval_result.get("error"):
                 logger.warning(f"Error retrieving from {kb_type} KB: {retrieval_result['error']}")
@@ -180,7 +202,7 @@ async def retrieve_documents(state: State, config: RunnableConfig) -> Dict[str, 
         all_sources.sort(key=lambda x: x.get("score", 0.0), reverse=True)
         
         # Evaluate sources and calculate confidence
-        source_confidence, evaluations = reasoning_engine.evaluate_sources(all_documents, state.query)
+        source_confidence, evaluations = reasoning_engine.evaluate_sources(all_documents, query)
         confidence_score = reasoning_engine.calculate_confidence_score(source_confidence)
         
         return {
@@ -203,17 +225,30 @@ async def retrieve_documents(state: State, config: RunnableConfig) -> Dict[str, 
         }
 
 
-async def generate_answer(state: State, config: RunnableConfig) -> Dict[str, Any]:
+async def generate_answer(state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
     """Generate answer using retrieved context and Bedrock LLM."""
     configuration = config.get("configurable", {})
     
+    # Extract query from the last human message
+    messages = state.get("messages", [])
+    query = None
+    for message in reversed(messages):
+        if isinstance(message, HumanMessage):
+            query = message.content
+            break
+    
+    if not query:
+        return {
+            "error": "No human message found to process",
+        }
+    
     # Check if we have context
-    if not state.context or state.context == "No relevant documents found.":
+    if not state.get("context") or state.get("context") == "No relevant documents found.":
         no_context_answer = "🔍 **No relevant information found**\n\nI couldn't find any documents in the knowledge base that match your query.\n\n**Suggestions:**\n• Try rephrasing your question\n• Use different keywords\n• Check if the topic is covered in the available knowledge bases"
         
         # Add reasoning if available
-        if state.reasoning_engine and state.show_reasoning:
-            no_context_answer += state.reasoning_engine.format_reasoning(state.confidence_score, show_details=True)
+        if state.get("reasoning_engine") and state.get("show_reasoning", True):
+            no_context_answer += state.get("reasoning_engine").format_reasoning(state.get("confidence_score", 0.0), show_details=True)
         
         return {
             "answer": no_context_answer,
@@ -236,16 +271,17 @@ async def generate_answer(state: State, config: RunnableConfig) -> Dict[str, Any
         llm = await asyncio.to_thread(create_llm)
         
         # Create confidence-aware prompt
-        confidence_level = "high" if state.confidence_score >= 0.8 else "medium" if state.confidence_score >= 0.6 else "low"
+        confidence_level = "high" if state.get("confidence_score", 0.0) >= 0.8 else "medium" if state.get("confidence_score", 0.0) >= 0.6 else "low"
         
         # Add uncertainty considerations to system prompt if needed
         uncertainty_notes = ""
-        if state.reasoning_engine and state.reasoning_engine.uncertainty_flags:
-            if UncertaintyType.OUTDATED_INFORMATION in state.reasoning_engine.uncertainty_flags:
+        reasoning_engine = state.get("reasoning_engine")
+        if reasoning_engine and reasoning_engine.uncertainty_flags:
+            if UncertaintyType.OUTDATED_INFORMATION in reasoning_engine.uncertainty_flags:
                 uncertainty_notes += "\n- Some sources may be outdated - mention if information might have changed"
-            if UncertaintyType.CONFLICTING_SOURCES in state.reasoning_engine.uncertainty_flags:
+            if UncertaintyType.CONFLICTING_SOURCES in reasoning_engine.uncertainty_flags:
                 uncertainty_notes += "\n- Sources contain conflicting information - present different viewpoints if relevant"
-            if UncertaintyType.LIMITED_SOURCES in state.reasoning_engine.uncertainty_flags:
+            if UncertaintyType.LIMITED_SOURCES in reasoning_engine.uncertainty_flags:
                 uncertainty_notes += "\n- Limited sources available - acknowledge gaps in information"
         
         prompt = ChatPromptTemplate.from_messages([
@@ -253,7 +289,7 @@ async def generate_answer(state: State, config: RunnableConfig) -> Dict[str, Any
 Use ONLY the information from the context to answer questions. 
 If the context doesn't contain enough information to answer the question, say so clearly.
 
-Current confidence level: {confidence_level} ({state.confidence_score:.0%})
+Current confidence level: {confidence_level} ({state.get('confidence_score', 0.0):.0%})
 {uncertainty_notes}
 
 When answering:
@@ -278,8 +314,8 @@ Please provide a clear and accurate answer based on the context above."""),
         response = await asyncio.to_thread(
             chain.invoke,
             {
-                "context": state.context,
-                "query": state.query,
+                "context": state.get("context", ""),
+                "query": query,
             }
         )
         
@@ -295,25 +331,29 @@ Please provide a clear and accurate answer based on the context above."""),
         }
 
 
-async def format_response(state: State, config: RunnableConfig) -> Dict[str, Any]:
+async def format_response(state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
     """Format the final response with answer and sources."""
     # If there's an error, return it
-    if state.error:
+    if state.get("error"):
         return {
-            "answer": f"❌ Error: {state.error}",
+            "messages": [AIMessage(content=f"❌ Error: {state.get('error')}")],
         }
     
     # Start with the answer
-    formatted_response = f"💡 **Answer:**\n{state.answer}"
+    answer = state.get("answer", "")
+    if not answer:
+        return {"messages": [AIMessage(content="No answer generated")]}
+    formatted_response = f"💡 **Answer:**\n{answer}"
     
     # Add sources if available
-    if state.sources:
+    sources = state.get("sources", [])
+    if sources:
         formatted_response += "\n\n" + "─" * 50 + "\n"
         formatted_response += "📚 **Sources:**"
         
         # Group sources by KB type
         sources_by_kb = {}
-        for source in state.sources[:6]:  # Limit to top 6 sources total
+        for source in sources[:6]:  # Limit to top 6 sources total
             kb_type = source.get("kb_type", "unknown")
             if kb_type not in sources_by_kb:
                 sources_by_kb[kb_type] = []
@@ -350,18 +390,21 @@ async def format_response(state: State, config: RunnableConfig) -> Dict[str, Any
         formatted_response += "\n\n" + "─" * 50
     
     # Add a footer with retrieval statistics
-    formatted_response += f"\n\n📊 Retrieved {len(state.retrieved_documents)} documents from {len(set(doc.get('kb_type', 'unknown') for doc in state.retrieved_documents))} knowledge base(s)"
+    retrieved_docs = state.get("retrieved_documents", [])
+    formatted_response += f"\n\n📊 Retrieved {len(retrieved_docs)} documents from {len(set(doc.get('kb_type', 'unknown') for doc in retrieved_docs))} knowledge base(s)"
     
     # Add reasoning explanation if available
-    if state.reasoning_engine and state.show_reasoning:
-        formatted_response += state.reasoning_engine.format_reasoning(state.confidence_score, show_details=True)
+    reasoning_engine = state.get("reasoning_engine")
+    if reasoning_engine and state.get("show_reasoning", True):
+        formatted_response += reasoning_engine.format_reasoning(state.get("confidence_score", 0.0), show_details=True)
     
-    return {"answer": formatted_response}
+    # Return as AIMessage for chat interface
+    return {"messages": [AIMessage(content=formatted_response)]}
 
 
 # Define the graph
 graph = (
-    StateGraph(State, config_schema=Configuration)
+    StateGraph(AgentState, config_schema=Configuration)
     .add_node("retrieve_documents", retrieve_documents)
     .add_node("generate_answer", generate_answer)
     .add_node("format_response", format_response)
