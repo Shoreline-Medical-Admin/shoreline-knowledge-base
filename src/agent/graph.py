@@ -18,8 +18,8 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import StateGraph, MessagesState
 
-from agent.bedrock_retriever import BedrockKnowledgeBaseRetriever
-from agent.reasoning import ReasoningEngine, UncertaintyType, ConfidenceLevel
+from .bedrock_retriever import BedrockKnowledgeBaseRetriever
+from .reasoning import ReasoningEngine, UncertaintyType, ConfidenceLevel
 
 # Load environment variables
 load_dotenv()
