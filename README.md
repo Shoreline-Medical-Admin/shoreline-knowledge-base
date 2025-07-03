@@ -21,6 +21,8 @@ This LangGraph agent retrieves information from AWS Bedrock Knowledge Base and g
 - **Flexible Querying**: Choose to query medical KB, CMS KB, or both
 - **Error Handling**: Graceful handling of AWS authentication and retrieval errors
 - **LangGraph Studio Support**: Visual debugging and monitoring of the agent workflow
+- **Chat Interface Support**: Works with LangGraph Studio's chat mode for conversational interactions
+- **Streamlit Web App**: Professional chat interface for easy interaction with the knowledge base
 
 ## Getting Started
 
@@ -168,6 +170,74 @@ To disable reasoning transparency in a specific query:
 3. **IAM Permissions**: Ensure your AWS credentials have permissions for:
    - `bedrock:InvokeModel`
    - `bedrock:Retrieve`
+
+## Web Application
+
+This project includes a Streamlit-based chat interface for easy interaction with the Knowledge Base Agent.
+
+### Installation
+
+Install the Streamlit dependencies:
+
+```bash
+pip install -e ".[streamlit]"
+```
+
+### Streamlit Chat Interface
+
+The Streamlit app (`app_streamlit.py`) provides a professional chat interface for querying the knowledge base.
+
+**Features:**
+- 💬 **Persistent chat history** - Maintains conversation context across interactions
+- ⚙️ **Live configuration** - Adjust settings via the sidebar without restarting
+- 🎨 **Professional UI** - Clean, medical-grade interface design
+- 📊 **Real-time feedback** - Shows which knowledge bases are being queried
+- 🔍 **Confidence display** - See reasoning transparency in responses
+
+**Run:**
+```bash
+streamlit run app_streamlit.py
+```
+
+The app will open in your browser at `http://localhost:8501`
+
+### Using the LangGraph API
+
+LangGraph Studio automatically provides API endpoints for your agent. Once the server is running with `langgraph dev`, you can access:
+
+- **REST API**: Available at the configured port
+- **WebSocket support**: For real-time streaming
+- **Built-in playground**: Test your agent through the Studio UI
+
+For custom API needs or production deployments, the LangGraph server handles all the API functionality you need.
+
+### Deployment Options
+
+**Streamlit Cloud:**
+1. Push your repository to GitHub
+2. Go to [share.streamlit.io](https://share.streamlit.io)
+3. Connect your GitHub repository
+4. Configure secrets in Streamlit Cloud settings
+5. Deploy with automatic HTTPS and authentication
+
+**LangGraph Cloud:**
+1. Use the built-in LangGraph deployment options
+2. Deploy using LangGraph Cloud for production API access
+3. Configure authentication and rate limiting through LangGraph
+
+### Customization Tips
+
+- **UI Theme**: Modify colors and fonts in `.streamlit/config.toml`
+- **Page Config**: Adjust `st.set_page_config()` for title, icon, and layout
+- **Custom CSS**: Use `st.markdown()` with unsafe HTML for advanced styling
+- **Session State**: Add more features using `st.session_state`
+
+### Troubleshooting
+
+1. **Import errors**: Make sure you've installed with `pip install -e ".[streamlit]"`
+2. **AWS errors**: Check your `.env` file has correct credentials
+3. **Memory issues**: Reduce `max_results` or implement pagination
+4. **Slow responses**: Consider caching frequently asked questions
 
 ## Development
 

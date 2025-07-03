@@ -28,6 +28,7 @@ dev = [
     "pytest-mock>=3.11.0",
     "boto3-stubs[bedrock,bedrock-runtime,bedrock-agent,bedrock-agent-runtime]>=1.34.0",
     "types-requests>=2.31.0",
+    "watchdog>=3.0.0",  # For better Streamlit file watching in development
 ]
 test = [
     "pytest>=8.3.5",
@@ -41,6 +42,9 @@ test = [
 prod = [
     "gunicorn>=21.2.0",
     "uvicorn>=0.24.0",
+]
+streamlit = [
+    "streamlit>=1.28.0",
 ]
 
 [build-system]
