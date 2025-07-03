@@ -15,6 +15,8 @@ This LangGraph agent retrieves information from AWS Bedrock Knowledge Base and g
 - **AWS Bedrock Knowledge Base Integration**: Retrieves relevant documents from your knowledge bases
 - **Retrieval-Augmented Generation**: Uses retrieved context to generate accurate answers
 - **Source Attribution**: Shows which KB each source came from with relevance scores
+- **Reasoning Transparency**: Displays confidence scores and reasoning process for each answer
+- **Uncertainty Detection**: Identifies and warns about limited sources, outdated information, or conflicts
 - **Configurable Parameters**: Customize model, temperature, and retrieval settings
 - **Flexible Querying**: Choose to query medical KB, CMS KB, or both
 - **Error Handling**: Graceful handling of AWS authentication and retrieval errors
@@ -77,9 +79,9 @@ For more information on getting started with LangGraph Server, [see here](https:
 
 The agent uses a multi-node graph with the following flow:
 
-1. **retrieve_documents**: Queries AWS Bedrock Knowledge Base for relevant documents
-2. **generate_answer**: Uses retrieved context with Bedrock LLM to generate an answer
-3. **format_response**: Formats the final response with source attribution
+1. **retrieve_documents**: Queries AWS Bedrock Knowledge Base for relevant documents and evaluates source quality
+2. **generate_answer**: Uses retrieved context with Bedrock LLM to generate an answer, considering confidence levels
+3. **format_response**: Formats the final response with source attribution and reasoning explanation
 
 ## Usage
 
@@ -126,6 +128,38 @@ Once the server is running, you can interact with the agent through LangGraph St
 - **model_id**: Bedrock model to use for generation (default: Claude Sonnet 4)
 - **max_results**: Maximum number of documents to retrieve per KB (default: 5)
 - **temperature**: Model temperature for response generation (default: 0.3)
+
+## Reasoning Transparency
+
+The agent now includes reasoning transparency features that help users understand how answers are generated:
+
+### Confidence Scoring
+- **🟢 High Confidence (80-100%)**: Multiple relevant sources with high scores
+- **🟡 Medium Confidence (60-79%)**: Adequate sources but some limitations
+- **🟠 Low Confidence (40-59%)**: Limited or less relevant sources
+- **🔴 Very Low Confidence (<40%)**: Minimal sources or significant issues
+
+### Uncertainty Detection
+The agent automatically detects and warns about:
+- **Limited Sources**: When fewer than 3 documents are found
+- **Outdated Information**: Sources older than 2 years
+- **Conflicting Sources**: Significant disagreement between documents
+- **Low Relevance**: No highly relevant sources (score < 80%)
+
+### Reasoning Process
+Each response includes a collapsible "Show Reasoning Process" section that displays:
+- Step-by-step reasoning with confidence impacts
+- Source evaluation scores (relevance, recency, authority)
+- Detailed explanations of any detected issues
+
+### Disabling Reasoning
+To disable reasoning transparency in a specific query:
+```python
+{
+    "query": "Your question here",
+    "show_reasoning": false
+}
+```
 
 ## Prerequisites
 
